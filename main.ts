@@ -2,10 +2,13 @@ import * as mediasoup from "mediasoup";
 import { types } from "mediasoup";
 import express from "express";
 import * as http from "http";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { RoomManager } from "./room-manager";
 import { MessageHandler } from "./message-handler";
 import { config } from "./config";
+
+// WebSocketクライアント管理用のマップ
+const clients = new Map<WebSocket, { roomSubscriptions: Set<string> }>();
 
 async function main() {
   // Expressアプリケーションを作成
@@ -36,6 +39,117 @@ async function main() {
   // WebSocketハンドラの設定
   const messageHandler = new MessageHandler(roomManager);
 
+  // イベント通知用の関数
+  function broadcastEvent(event: { type: string; data: any }): void {
+    for (const [client, _] of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(event));
+      }
+    }
+  }
+
+  // ルームイベントをクライアントに通知
+  roomManager.on("transportClosed", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "transportClosed",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("producerClosed", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "producerClosed",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("consumerClosed", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "consumerClosed",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("peerClosed", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "peerClosed",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("roomClosed", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "roomClosed",
+        ...data,
+      },
+    });
+  });
+
+  // 新しいイベントハンドラを追加
+  roomManager.on("roomCreated", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "roomCreated",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("peerAdded", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "peerAdded",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("transportCreated", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "transportCreated",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("producerCreated", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "producerCreated",
+        ...data,
+      },
+    });
+  });
+
+  roomManager.on("consumerCreated", (data) => {
+    broadcastEvent({
+      type: "event",
+      data: {
+        event: "consumerCreated",
+        ...data,
+      },
+    });
+  });
+
   wss.on("connection", (socket, request) => {
     console.log("New WebSocket connection");
 
@@ -50,6 +164,11 @@ async function main() {
       socket.close(1008, "Invalid API Key");
       return;
     }
+
+    // クライアントを管理対象に追加
+    clients.set(socket, {
+      roomSubscriptions: new Set(),
+    });
 
     socket.on("message", async (message) => {
       try {
@@ -72,6 +191,8 @@ async function main() {
 
     socket.on("close", () => {
       console.log("WebSocket connection closed");
+      // クライアント管理から削除
+      clients.delete(socket);
     });
   });
 

@@ -109,6 +109,119 @@ client.on("error", (error) => {
 client.on("message", (message) => {
   console.log("サーバーからメッセージを受信しました", message);
 });
+
+// mediasoup関連のイベント
+// ルーム作成イベント
+client.on("roomCreated", ({ roomId, roomInfo }) => {
+  console.log(`新しいルームが作成されました: ${roomId}`, roomInfo);
+});
+
+// ピア追加イベント
+client.on("peerAdded", ({ roomId, peerId, peerInfo }) => {
+  console.log(
+    `新しいピアが追加されました: ルーム=${roomId}, ピア=${peerId}`,
+    peerInfo,
+  );
+});
+
+// トランスポート作成イベント
+client.on(
+  "transportCreated",
+  ({ roomId, peerId, transportId, direction, transportInfo }) => {
+    console.log(
+      `新しいトランスポートが作成されました: ルーム=${roomId}, ピア=${peerId}, 方向=${direction}`,
+      transportInfo,
+    );
+  },
+);
+
+// プロデューサー作成イベント
+client.on(
+  "producerCreated",
+  ({ roomId, peerId, producerId, transportId, kind, producerInfo }) => {
+    console.log(
+      `新しいプロデューサーが作成されました: ルーム=${roomId}, ピア=${peerId}, 種類=${kind}`,
+      producerInfo,
+    );
+  },
+);
+
+// コンシューマー作成イベント
+client.on(
+  "consumerCreated",
+  ({ roomId, peerId, consumerId, producerId, transportId, consumerInfo }) => {
+    console.log(
+      `新しいコンシューマーが作成されました: ルーム=${roomId}, ピア=${peerId}, プロデューサー=${producerId}`,
+      consumerInfo,
+    );
+  },
+);
+
+// トランスポート切断イベント
+client.on("transportClosed", ({ roomId, peerId, transportId }) => {
+  console.log(
+    `トランスポート切断: ルーム=${roomId}, ピア=${peerId}, トランスポート=${transportId}`,
+  );
+});
+
+// プロデューサー切断イベント
+client.on("producerClosed", ({ roomId, peerId, producerId }) => {
+  console.log(
+    `プロデューサー切断: ルーム=${roomId}, ピア=${peerId}, プロデューサー=${producerId}`,
+  );
+});
+
+// コンシューマー切断イベント
+client.on("consumerClosed", ({ roomId, peerId, consumerId }) => {
+  console.log(
+    `コンシューマー切断: ルーム=${roomId}, ピア=${peerId}, コンシューマー=${consumerId}`,
+  );
+});
+
+// ピア切断イベント
+client.on("peerClosed", ({ roomId, peerId }) => {
+  console.log(`ピア切断: ルーム=${roomId}, ピア=${peerId}`);
+});
+
+// ルーム切断イベント
+client.on("roomClosed", ({ roomId }) => {
+  console.log(`ルーム切断: ルーム=${roomId}`);
+});
+```
+
+### リモート切断の検出の実装例
+
+以下は、リモートでトランスポートやプロデューサーが切断された場合の処理例です：
+
+```typescript
+// UIコンポーネントを更新する例
+const videoGrid = document.getElementById("video-grid");
+
+// プロデューサー切断イベント
+client.on("producerClosed", ({ roomId, peerId, producerId }) => {
+  console.log(`プロデューサー ${producerId} が切断されました`);
+
+  // UIから対応する映像要素を削除
+  const videoElement = document.getElementById(`video-${producerId}`);
+  if (videoElement) {
+    videoElement.remove();
+  }
+
+  // 状態管理を更新
+  updateParticipantState(peerId, { hasVideo: false });
+});
+
+// ピア切断イベント
+client.on("peerClosed", ({ roomId, peerId }) => {
+  console.log(`ピア ${peerId} が切断されました`);
+
+  // ピアに関連するすべての映像/音声要素を削除
+  const peerElements = document.querySelectorAll(`[data-peer-id="${peerId}"]`);
+  peerElements.forEach((element) => element.remove());
+
+  // 参加者リストからユーザーを削除
+  removeParticipantFromList(peerId);
+});
 ```
 
 ## 完全な使用例
@@ -387,6 +500,83 @@ async function monitorSystem() {
 }
 
 monitorSystem().catch(console.error);
+```
+
+### リアルタイム更新の実装例
+
+以下は、リアルタイムでの参加者やメディアの追加を検出して処理する例です：
+
+```typescript
+// 新規参加者の検出
+client.on("peerAdded", ({ roomId, peerId, peerInfo }) => {
+  console.log(`新しい参加者が入室しました: ${peerId}`);
+
+  // UI上に新しい参加者を表示
+  addParticipantToUI(peerId, peerInfo);
+
+  // 必要に応じて接続処理を開始
+  setupConnectionWith(peerId);
+});
+
+// 新しいビデオ/音声の検出
+client.on(
+  "producerCreated",
+  ({ roomId, peerId, producerId, kind, producerInfo }) => {
+    console.log(`${peerId} が新しい ${kind} ストリームを公開しました`);
+
+    if (peerId !== myPeerId) {
+      // このプロデューサーからの映像/音声を受信するためのコンシューマー作成
+      createConsumerForProducer(roomId, myPeerId, producerId);
+    }
+  },
+);
+
+// UIに新しいビデオ要素を追加する例
+function createConsumerForProducer(roomId, myPeerId, producerId) {
+  async function subscribe() {
+    try {
+      // 受信用トランスポートがなければ作成
+      if (!recvTransport) {
+        recvTransport = await setupReceiveTransport(roomId, myPeerId);
+      }
+
+      // コンシューマー作成してメディアを受信
+      const consumer = await client.createConsumer(
+        roomId,
+        myPeerId,
+        recvTransport.id,
+        producerId,
+        device.rtpCapabilities,
+      );
+
+      if (consumer) {
+        // mediasoup-clientを使用してコンシューマーを作成
+        const msConsumer = await recvTransport.consume({
+          id: consumer.id,
+          producerId: consumer.producerId,
+          kind: consumer.kind,
+          rtpParameters: consumer.rtpParameters,
+        });
+
+        // 映像/音声要素に接続
+        const mediaElement = consumer.kind === "video"
+          ? document.createElement("video")
+          : document.createElement("audio");
+
+        mediaElement.id = `media-${consumer.id}`;
+        mediaElement.autoplay = true;
+        mediaElement.srcObject = new MediaStream([msConsumer.track]);
+
+        // UIに追加
+        document.getElementById("media-container").appendChild(mediaElement);
+      }
+    } catch (error) {
+      console.error("コンシューマー作成エラー:", error);
+    }
+  }
+
+  subscribe();
+}
 ```
 
 ## ライセンス

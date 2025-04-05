@@ -8,12 +8,14 @@ import {
   TransportInfo,
 } from "./types";
 import { config } from "./config";
+import { EventEmitter } from "events";
 
-export class RoomManager {
+export class RoomManager extends EventEmitter {
   private worker: mediasoup.types.Worker;
   private rooms: Map<string, Room> = new Map();
 
   constructor(worker: mediasoup.types.Worker) {
+    super();
     this.worker = worker;
   }
 
@@ -23,8 +25,46 @@ export class RoomManager {
     }
 
     const room = new Room(roomId, this.worker, options);
+
+    // ルームのイベントを監視して上位に伝播
+    room.on("close", () => {
+      this.emit("roomClosed", { roomId });
+    });
+
+    room.on("peerClosed", (data) => {
+      this.emit("peerClosed", { roomId, ...data });
+    });
+
+    room.on("transportClosed", (data) => {
+      this.emit("transportClosed", { roomId, ...data });
+    });
+
+    room.on("producerClosed", (data) => {
+      this.emit("producerClosed", { roomId, ...data });
+    });
+
+    room.on("consumerClosed", (data) => {
+      this.emit("consumerClosed", { roomId, ...data });
+    });
+
+    // 新しいイベントハンドラを追加
+    room.on("transportCreated", (data) => {
+      this.emit("transportCreated", { roomId, ...data });
+    });
+
+    room.on("producerCreated", (data) => {
+      this.emit("producerCreated", { roomId, ...data });
+    });
+
+    room.on("consumerCreated", (data) => {
+      this.emit("consumerCreated", { roomId, ...data });
+    });
+
     await room.initialize();
     this.rooms.set(roomId, room);
+
+    // ルーム作成イベントを発火
+    this.emit("roomCreated", { roomId, roomInfo: room.getInfo() });
 
     return room.getInfo();
   }
@@ -59,7 +99,7 @@ export class RoomManager {
   }
 }
 
-class Room {
+class Room extends EventEmitter {
   public id: string;
   private worker: mediasoup.types.Worker;
   private router: mediasoup.types.Router | null = null;
@@ -67,6 +107,7 @@ class Room {
   private options: any;
 
   constructor(id: string, worker: mediasoup.types.Worker, options: any = {}) {
+    super();
     this.id = id;
     this.worker = worker;
     this.options = options;
@@ -88,6 +129,7 @@ class Room {
     if (this.router) {
       this.router.close();
     }
+    this.emit("close");
   }
 
   getRouter(): mediasoup.types.Router {
@@ -103,7 +145,41 @@ class Room {
     }
 
     const peer = new Peer(peerId, this);
+
+    // ピアのイベントを監視して上位に伝播
+    peer.on("close", () => {
+      this.emit("peerClosed", { peerId });
+    });
+
+    peer.on("transportClosed", (data) => {
+      this.emit("transportClosed", { peerId, ...data });
+    });
+
+    peer.on("producerClosed", (data) => {
+      this.emit("producerClosed", { peerId, ...data });
+    });
+
+    peer.on("consumerClosed", (data) => {
+      this.emit("consumerClosed", { peerId, ...data });
+    });
+
+    // 新しいイベントハンドラを追加
+    peer.on("transportCreated", (data) => {
+      this.emit("transportCreated", { peerId, ...data });
+    });
+
+    peer.on("producerCreated", (data) => {
+      this.emit("producerCreated", { peerId, ...data });
+    });
+
+    peer.on("consumerCreated", (data) => {
+      this.emit("consumerCreated", { peerId, ...data });
+    });
+
     this.peers.set(peerId, peer);
+
+    // ピア追加イベントを発火
+    this.emit("peerAdded", { peerId, peerInfo: peer.getInfo() });
 
     return peer.getInfo();
   }
@@ -146,7 +222,7 @@ class Room {
   }
 }
 
-class Peer {
+class Peer extends EventEmitter {
   public id: string;
   private room: Room;
   private transports: Map<string, mediasoup.types.Transport> = new Map();
@@ -154,6 +230,7 @@ class Peer {
   private consumers: Map<string, mediasoup.types.Consumer> = new Map();
 
   constructor(id: string, room: Room) {
+    super();
     this.id = id;
     this.room = room;
   }
@@ -177,6 +254,7 @@ class Peer {
     this.consumers.clear();
     this.producers.clear();
     this.transports.clear();
+    this.emit("close");
   }
 
   async createTransport(
@@ -197,6 +275,25 @@ class Peer {
     // transportのクローズイベントを監視
     transport.on("routerclose", () => {
       this.transports.delete(transport.id);
+    });
+
+    // トランスポートのクローズイベントを監視
+    transport.on("@close", () => {
+      this.transports.delete(transport.id);
+      this.emit("transportClosed", { transportId: transport.id });
+    });
+
+    // トランスポート作成イベントを発火
+    this.emit("transportCreated", {
+      transportId: transport.id,
+      direction,
+      transportInfo: {
+        id: transport.id,
+        iceParameters: transport.iceParameters,
+        iceCandidates: transport.iceCandidates,
+        dtlsParameters: transport.dtlsParameters,
+        sctpParameters: transport.sctpParameters,
+      },
     });
 
     return {
@@ -233,6 +330,24 @@ class Peer {
     // producerのクローズイベントを監視
     producer.on("transportclose", () => {
       this.producers.delete(producer.id);
+    });
+
+    // プロデューサーのクローズイベントを監視
+    producer.on("@close", () => {
+      this.producers.delete(producer.id);
+      this.emit("producerClosed", { producerId: producer.id });
+    });
+
+    // プロデューサー作成イベントを発火
+    this.emit("producerCreated", {
+      producerId: producer.id,
+      transportId,
+      kind,
+      producerInfo: {
+        id: producer.id,
+        kind: producer.kind as "audio" | "video",
+        rtpParameters: producer.rtpParameters,
+      },
     });
 
     return {
@@ -273,8 +388,27 @@ class Peer {
       this.consumers.delete(consumer.id);
     });
 
+    // コンシューマーのクローズイベントを監視
+    consumer.on("@close", () => {
+      this.consumers.delete(consumer.id);
+      this.emit("consumerClosed", { consumerId: consumer.id });
+    });
+
     // consumerをレジュームする
     await consumer.resume();
+
+    // コンシューマー作成イベントを発火
+    this.emit("consumerCreated", {
+      consumerId: consumer.id,
+      producerId,
+      transportId,
+      consumerInfo: {
+        id: consumer.id,
+        producerId,
+        kind: consumer.kind as "audio" | "video",
+        rtpParameters: consumer.rtpParameters,
+      },
+    });
 
     return {
       id: consumer.id,
